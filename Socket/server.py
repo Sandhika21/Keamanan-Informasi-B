@@ -1,58 +1,22 @@
+import socket, select
+
+def asciiToBin(messages):
+    size = divmod(len(messages), 8)
+    msg = []
+    
+    for i in range(0, size[0]):
+        msg.append(''.join(bin(ord(i))[2:].zfill(8) for i in messages[i*8 : (i+1)*8]))
+        
+    if size[1] > 0:
+        msg.append(''.join(bin(ord(i))[2:].zfill(8) for i in messages[size[0]*8 : (size[0])*8+size[1]]).ljust(64, '0'))
+        
+    return msg
+
+def binToAscii(messages):
+    return ''.join(chr(int(message[i*8 : (i+1)*8], 2)) for message in messages for i in range(8))
+    
 def permutation(shuffle_bits, binary):
-    rearrange = ""
-    for i in range(len(shuffle_bits)):
-        rearrange += binary[shuffle_bits[i]-1]
-    return rearrange
-
-def hex2bin(s):
-    mp = {'0': "0000",
-          '1': "0001",
-          '2': "0010",
-          '3': "0011",
-          '4': "0100",
-          '5': "0101",
-          '6': "0110",
-          '7': "0111",
-          '8': "1000",
-          '9': "1001",
-          'A': "1010",
-          'B': "1011",
-          'C': "1100",
-          'D': "1101",
-          'E': "1110",
-          'F': "1111"}
-    bin = ""
-    for i in range(len(s)):
-        bin = bin + mp[s[i]]
-    return bin
-
-def bin2hex(s):
-    mp = {"0000": '0',
-          "0001": '1',
-          "0010": '2',
-          "0011": '3',
-          "0100": '4',
-          "0101": '5',
-          "0110": '6',
-          "0111": '7',
-          "1000": '8',
-          "1001": '9',
-          "1010": 'A',
-          "1011": 'B',
-          "1100": 'C',
-          "1101": 'D',
-          "1110": 'E',
-          "1111": 'F'}
-    hex = ""
-    for i in range(0, len(s), 4):
-        ch = ""
-        ch = ch + s[i]
-        ch = ch + s[i + 1]
-        ch = ch + s[i + 2]
-        ch = ch + s[i + 3]
-        hex = hex + mp[ch]
- 
-    return hex
+    return ''.join(binary[bit - 1] for bit in shuffle_bits)
 
 class Key():
     def __init__(self, key):
@@ -61,15 +25,13 @@ class Key():
         self.exc = [1, 2, 9, 16]
         
     def key_generator(self):
-        print("\tShift left:")
-        print(f'\tL0 : {self.key[:28]} | R0 : {self.key[28:]}')
         for i in range(1, 17):
             shift = 2
             if i in self.exc:
                 shift = 1
-            print(f'\tL{i} : {self.key[shift:28] + self.key[:shift]} | R{i} : {self.key[shift+28:] + self.key[28 : shift+28]}')
             self.key = self.key[shift:28] + self.key[:shift] + self.key[shift+28:] + self.key[28 : shift+28]
-            self.keys.append(permutation(self.PC2(), self.key))
+            sub_key = permutation(self.PC2(), self.key)
+            self.keys.append(sub_key)
         return self.keys
     
     def PC1(self): #64 bit => 56 bit
@@ -95,12 +57,11 @@ class Key():
             44, 49, 39, 56, 34, 53,
             46, 42, 50, 36, 29, 32
         ]
-
-class Message():
-    def __init__(self, message, keys):
-        self.message = message
-        self.keys = keys
         
+class Message():
+    def __init__(self, keys):
+        self.keys = keys
+                
     def XOR(self, bin1, bin2):
         binary = ""
         for i in range(len(bin1)):
@@ -118,19 +79,35 @@ class Message():
             substituted_bits += bin(self.Substitution_Boxes()[i][row][column])[2:].zfill(4)
         return substituted_bits
     
-    def encryption(self):
-        permuted_msg = permutation(self.initial_permutation(), self.message)
+    def encrypt_message(self, messages):
+        encrypted_message = []
+        messages = asciiToBin(messages)
+        for message in messages:
+            bin_message = self.encryption(message, self.keys)
+            encrypted_message.append(bin_message)
+        return binToAscii(encrypted_message)
+    
+    def decrypt_message(self, messages):
+        decrypted_message = []
+        messages = asciiToBin(messages)
+        for message in messages:
+            bin_message = self.encryption(message, self.keys[::-1])
+            decrypted_message.append(bin_message)
+        return binToAscii(decrypted_message)
+        
+    
+    def encryption(self, message, key):
+        permuted_msg = permutation(self.initial_permutation(), message)
         left = permuted_msg[:32]
         right = permuted_msg[32:]
         
         for i in range(16):
             exp_bits = permutation(self.Expansion_Permutation(), right)
-            xor_bits = self.XOR(self.keys[i], exp_bits)
+            xor_bits = self.XOR(key[i], exp_bits)
             substituted_bits = self.substitution(xor_bits)
             f_per_bits = permutation(self.Permutation_Function(), substituted_bits)
             
             left, right = right, self.XOR(left, f_per_bits)
-            print(f'\tROUND {i+1}   L{i+1} : {left} | R{i+1} : {right}')
             
         return permutation(self.final_permutation(), right + left)
     
@@ -233,59 +210,31 @@ class Message():
         return inv_ip
 
 def main():
-    message = "123456ABCD132536"
-    key = "AABB09182736CCDD"
+    key = "t2Socket"
+    message = Message(Key(key=asciiToBin(key)[0]).key_generator())
+    
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server_socket.bind(('localhost', 5000))
+    server_socket.listen(2)
 
-    bin_msg = hex2bin(message)
-    bin_key = hex2bin(key)
-    
-    keys = Key(bin_key)
-    print("Key Generator:")
-    print(f'\tKey after PC-1 Table(56 bit): {keys.key}\n')
-    sub_keys = keys.key_generator()
-    print("\n\tSub Keys:")
-    for i in range(len(sub_keys)):
-        print(f'\tSub Key {i+1} : {sub_keys[i]}')
-    
-    print("\nEncryption:")
-    encrypt = Message(bin_msg, sub_keys)
-    print(f'\tMessage after IP (64-bit): {encrypt.message}')
-    print(f'\n\tProcessing per Round:')
-    encryption = encrypt.encryption()
-    print(f'\n\tCiphert Text : {bin2hex(encryption)} | {encryption}\n')
-    
-    print("\nDecryption:")
-    decrypt_key = sub_keys[::-1]
-    decrypt = Message(encryption, decrypt_key)
-    print(f'\tCipher Text after IP (64-bit): {decrypt.message}')
-    print(f'\n\tProcessing per Round:')
-    descryption = decrypt.encryption()
-    print(f'\n\tPlain Text : {bin2hex(descryption)} | {descryption}\n')
-    
-    #test(s_key, sub_keys)
-    
-    
-if __name__ == "__main__":
+    clients_socket, client_address = server_socket.accept()
+    print("Connection from: " + str(client_address))
+
+    while True:
+        data = clients_socket.recv(1024).decode()
+        decrypted_data = message.decrypt_message(data)
+        
+        if decrypted_data == 'exit':
+            print(f'Client {clients_socket} disconnected')
+            clients_socket.close()
+            break
+            
+        print(f"RECV: \n\tCipherText : {data} \n\tPlainText : {decrypted_data}")   
+        
+        send_message = input("SEND: ")
+        encrypted_message = message.encrypt_message(send_message)
+        clients_socket.send(encrypted_message.encode()) 
+
+if __name__ == '__main__':
     main()
-    
-
-
-
-
-
-
-    
-
-
-
-
-
-
-
-
-
-
-
-
-    
-    
